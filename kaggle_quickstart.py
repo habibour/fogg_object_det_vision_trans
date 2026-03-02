@@ -101,9 +101,14 @@ print("\n📦 Loading datasets...")
 
 with open(PAIRS_JSON, 'r') as f:
     pairs_data = json.load(f)
+
+# Define classes (VOC filtered dataset)
+CLASSES = ['bicycle', 'bus', 'car', 'motorbike', 'person']
     
 print(f"Total pairs: {len(pairs_data['pairs'])}")
-print(f"Classes: {pairs_data['metadata']['classes']}")
+print(f"Fog levels: {pairs_data['metadata']['fog_levels']}")
+print(f"Classes: {CLASSES}")
+print(f"Number of classes: {len(CLASSES)}")
 
 # Create dataloaders (handled by PLRTDETRTrainer)
 
