@@ -603,8 +603,26 @@ class PLRTDETRTrainer:
         }
         
         save_path = self.checkpoint_dir / filename
-        torch.save(checkpoint, save_path)
-        print(f"Checkpoint saved: {save_path}")
+        
+        try:
+            # Ensure directory exists
+            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save checkpoint
+            torch.save(checkpoint, save_path)
+            
+            # Verify file was written
+            if save_path.exists():
+                file_size_mb = save_path.stat().st_size / (1024 * 1024)
+                print(f"💾 Checkpoint saved: {save_path}")
+                print(f"   File size: {file_size_mb:.2f} MB")
+            else:
+                print(f"⚠️  Warning: Checkpoint file not found after save: {save_path}")
+                
+        except Exception as e:
+            print(f"❌ Error saving checkpoint: {e}")
+            import traceback
+            traceback.print_exc()
     
     def load_checkpoint(self, checkpoint_path, is_teacher=True):
         """Load model checkpoint."""
