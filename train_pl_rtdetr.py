@@ -366,6 +366,7 @@ class PLRTDETRTrainer:
             # Save periodic checkpoint
             if (epoch + 1) % self.config['save_interval'] == 0:
                 self.save_checkpoint(f'teacher_epoch_{epoch+1}.pth', is_teacher=True)
+                print(f"💾 Checkpoint saved: teacher_epoch_{epoch+1}.pth")
         
         print("\n✅ Teacher training complete!")
         
@@ -474,6 +475,7 @@ class PLRTDETRTrainer:
             # Save periodic checkpoint
             if (epoch + 1) % self.config['save_interval'] == 0:
                 self.save_checkpoint(f'student_epoch_{epoch+1}.pth', is_teacher=False)
+                print(f"💾 Checkpoint saved: student_epoch_{epoch+1}.pth")
         
         print("\n✅ Student training complete!")
     
