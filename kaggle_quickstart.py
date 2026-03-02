@@ -34,8 +34,9 @@ print(f"PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}")
 # ===========================
 # Kaggle dataset paths
 KAGGLE_VOC_PREFIX = "/kaggle/input/datasets/mdhabibourrahman/voc-2012-filtered"
-DATASET_ROOT = f"{KAGGLE_VOC_PREFIX}/voc_2012/processed"
-PAIRS_JSON = f"{DATASET_ROOT}/VOC2012_paired/pairs.json"
+# Dataset structure - point to VOC2012_paired directory
+DATASET_ROOT = f"{KAGGLE_VOC_PREFIX}/voc_2012/processed/VOC2012_paired"
+PAIRS_JSON = f"{DATASET_ROOT}/pairs.json"
 
 # Output directories
 OUTPUT_DIR = "/kaggle/working/logs"
