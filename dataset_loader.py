@@ -133,20 +133,38 @@ class VOCPairedDataset(Dataset):
         
         # Load clean image
         if self.return_clean:
+            # Clean images might also be in VOC2012_filtered, not VOC2012_paired
+            # Try VOC2012_paired first, fallback to VOC2012_filtered
             clean_img_path = self.dataset_root / pair['clean']['image']
+            if not clean_img_path.exists():
+                # Fallback to VOC2012_filtered
+                filtered_base = self.dataset_root.parent / 'VOC2012_filtered'
+                clean_img_path = filtered_base / 'JPEGImages' / f'{image_id}.jpg'
             clean_image = cv2.imread(str(clean_img_path))
+            if clean_image is None:
+                raise FileNotFoundError(f"Clean image not found: {clean_img_path}")
             clean_image = cv2.cvtColor(clean_image, cv2.COLOR_BGR2RGB)
             result['clean_image'] = clean_image
         
         # Load foggy image
         if self.return_foggy:
-            foggy_img_path = self.dataset_root / pair['foggy'][selected_fog_level]['image']
+            # Foggy images are actually in VOC2012_foggy directory, not VOC2012_paired
+            # Construct path to VOC2012_foggy/{level}/{image_id}.jpg
+            foggy_base = self.dataset_root.parent / 'VOC2012_foggy'
+            foggy_img_path = foggy_base / selected_fog_level / f'{image_id}.jpg'
             foggy_image = cv2.imread(str(foggy_img_path))
+            if foggy_image is None:
+                raise FileNotFoundError(f"Foggy image not found: {foggy_img_path}")
             foggy_image = cv2.cvtColor(foggy_image, cv2.COLOR_BGR2RGB)
             result['foggy_image'] = foggy_image
         
         # Load annotations (same for clean and foggy)
+        # Try VOC2012_paired first, fallback to VOC2012_filtered
         ann_path = self.dataset_root / pair['clean']['annotation']
+        if not ann_path.exists():
+            # Fallback to VOC2012_filtered
+            filtered_base = self.dataset_root.parent / 'VOC2012_filtered'
+            ann_path = filtered_base / 'Annotations' / f'{image_id}.xml'
         annotations = self.parse_voc_xml(str(ann_path))
         
         result['boxes'] = annotations['boxes']
