@@ -37,6 +37,8 @@ env/
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb
+# Keep Kaggle training notebook
+!kaggle_training.ipynb
 
 # Dataset files (large files)
 voc_2012/
