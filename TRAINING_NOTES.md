@@ -3,9 +3,11 @@
 ## Changes Made (March 2, 2026)
 
 ### Problem
+
 The original `train_pl_rtdetr.py` used placeholder detection loss (constant 0.5), which prevented actual model training and learning.
 
 ### Solution
+
 Integrated **real RT-DETR detection loss computation** into the perceptual loss training framework:
 
 1. **Added `compute_detection_loss()` method**
@@ -14,7 +16,7 @@ Integrated **real RT-DETR detection loss computation** into the perceptual loss 
    - Falls back to prediction-based loss when internal loss unavailable
    - Ensures gradient flow for backpropagation
 
-2. **Updated Teacher Training** 
+2. **Updated Teacher Training**
    - Now uses real detection loss instead of placeholder
    - Trains on clean images with actual bbox + classification losses
 
@@ -26,29 +28,33 @@ Integrated **real RT-DETR detection loss computation** into the perceptual loss 
 ## Expected Performance
 
 ### Baseline (Native RT-DETR without Perceptual Loss)
-| Dataset | mAP@50 |
-|---------|--------|
-| VOC Clean | ~0.909 |
+
+| Dataset                      | mAP@50 |
+| ---------------------------- | ------ |
+| VOC Clean                    | ~0.909 |
 | Synthetic Fog (Low/Mid/High) | ~0.800 |
-| RTTS (Real Fog) | ~0.403 |
+| RTTS (Real Fog)              | ~0.403 |
 
 ### Target (PL-RT-DETR with Perceptual Loss) - Paper Results
-| Dataset | mAP@50 |
-|---------|--------|
-| VOC Clean | **0.909** |
-| Synthetic Fog (Low) | **0.871** (+7.1%) |
-| Synthetic Fog (Mid) | **0.872** (+7.2%) |
+
+| Dataset              | mAP@50            |
+| -------------------- | ----------------- |
+| VOC Clean            | **0.909**         |
+| Synthetic Fog (Low)  | **0.871** (+7.1%) |
+| Synthetic Fog (Mid)  | **0.872** (+7.2%) |
 | Synthetic Fog (High) | **0.871** (+7.1%) |
-| RTTS (Real Fog) | **0.422** (+1.9%) |
+| RTTS (Real Fog)      | **0.422** (+1.9%) |
 
 ### Realistic Expectations with Current Implementation
-| Dataset | Expected mAP@50 |
-|---------|----------------|
-| VOC Clean | 0.85-0.91 |
-| Synthetic Fog | 0.75-0.85 |
-| RTTS (Real Fog) | 0.35-0.42 |
+
+| Dataset         | Expected mAP@50 |
+| --------------- | --------------- |
+| VOC Clean       | 0.85-0.91       |
+| Synthetic Fog   | 0.75-0.85       |
+| RTTS (Real Fog) | 0.35-0.42       |
 
 **Note:** Achieving paper-level results requires:
+
 - ✅ Real detection loss (now implemented)
 - ✅ Perceptual loss framework (already implemented)
 - ⚠️ Proper RT-DETR loss internals (partially implemented - using proxy when unavailable)
@@ -64,25 +70,25 @@ config = {
     # Dataset
     'dataset_root': '/path/to/VOC2012_paired',
     'pairs_json': '/path/to/pairs.json',
-    
+
     # Training
     'batch_size': 8,  # Adjust based on GPU memory
     'img_size': 640,
     'teacher_epochs': 100,  # Paper uses 100
     'student_epochs': 100,  # Paper uses 100
-    
+
     # Optimization
     'learning_rate': 1e-4,  # Lower for stability
     'weight_decay': 1e-4,
-    
+
     # Loss weights
     'perceptual_weight': 0.1,  # Balance between detection and perceptual
     'perceptual_backbone': 'vgg19',  # vgg16, vgg19, or resnet50
-    
+
     # Hardware
     'device': 'cuda',
     'num_workers': 4,
-    
+
     # Checkpointing
     'val_interval': 2,
     'save_interval': 2
@@ -100,16 +106,20 @@ config['batch_size'] = 4       # Smaller batches
 ## Loss Components
 
 ### Teacher Training
+
 ```
 Total Loss = Detection Loss
 ```
+
 - **Detection Loss**: Bounding box regression + Classification
 - Trained on clean images only
 
-### Student Training  
+### Student Training
+
 ```
 Total Loss = Detection Loss + λ × Perceptual Loss
 ```
+
 - **Detection Loss**: Bbox + Classification on foggy images
 - **Perceptual Loss**: Feature alignment between teacher (clean) and student (foggy)
 - **λ (lambda)**: Perceptual weight (default: 0.1)
@@ -141,16 +151,19 @@ Progress bars now update every 5% of batches (or minimum every 25 batches) inste
 ## Troubleshooting
 
 ### Low Detection Loss (<0.1)
+
 - May indicate proxy loss being used instead of internal RT-DETR loss
 - Check for warnings in training output
 - Verify targets are properly formatted
 
 ### Training Not Converging
+
 - Reduce learning rate (try 5e-5 or 1e-5)
 - Increase perceptual_weight (try 0.2 or 0.3)
 - Check dataset quality and annotations
 
 ### OOM Errors
+
 - Reduce batch_size (try 4 or 2)
 - Reduce img_size (try 512 instead of 640)
 - Reduce num_workers
