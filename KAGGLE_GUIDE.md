@@ -48,6 +48,55 @@ Or re-run the clone command (it will skip if already exists):
 !git clone https://github.com/habibour/fogg_object_det_vision_trans.git
 ```
 
+## ⚠️ Training Approaches
+
+### Current Implementation (Demonstration)
+
+The notebooks (`kaggle_training.ipynb` and `kaggle_quickstart.py`) demonstrate the training pipeline structure using the PL-RT-DETR trainer class.
+
+**Note**: The current implementation uses **placeholder loss values (0.5)** for demonstration purposes. This shows the training loop, checkpointing, and evaluation pipeline, but **does not perform actual gradient-based optimization** with RT-DETR's detection loss.
+
+**Expected behavior:**
+
+- Loss remains constant at 0.5
+- Checkpoints are saved every 2 epochs
+- Validation runs but uses placeholder mAP
+- Training completes successfully
+
+### Native RT-DETR Training (For Production Use)
+
+For actual RT-DETR training with real loss computation and optimization, use `train_rtdetr_native.py`:
+
+```python
+from train_rtdetr_native import train_teacher_native, train_student_native
+
+# Train teacher
+teacher_results, teacher_model = train_teacher_native(
+    dataset_root="/kaggle/input/datasets/mdhabibourrahman/voc-2012-filtered/voc_2012/processed/VOC2012_paired",
+    output_dir="/kaggle/working/logs",
+    epochs=20,
+    batch_size=8
+)
+
+# Train student
+student_results, student_model = train_student_native(
+    dataset_root="/kaggle/input/datasets/mdhabibourrahman/voc-2012-filtered/voc_2012/processed/VOC2012_paired",
+    teacher_weights="/kaggle/working/logs/teacher/weights/best.pt",
+    output_dir="/kaggle/working/logs",
+    epochs=20,
+    batch_size=8,
+    use_foggy=True
+)
+```
+
+This uses Ultralytics' native `.train()` API with proper loss computation, optimizer steps, and evaluation.
+
+**Requirements for native training:**
+
+- Dataset must be in YOLO format (images + txt labels)
+- Or implement custom data loader for VOC XML format
+- See `train_rtdetr_native.py` for implementation details
+
 ## 📊 Training Details
 
 ### Stage 1: Teacher Network
