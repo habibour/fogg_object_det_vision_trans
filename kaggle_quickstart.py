@@ -96,6 +96,56 @@ from datetime import datetime
 print("\n✅ Modules imported!")
 
 # ===========================
+# SECTION 5.5: Create Split Files if Missing
+# ===========================
+import shutil
+
+imagesets_dir = f"{DATASET_ROOT}/ImageSets/Main"
+os.makedirs(imagesets_dir, exist_ok=True)
+
+train_file = os.path.join(imagesets_dir, 'train.txt')
+val_file = os.path.join(imagesets_dir, 'val.txt')
+
+if not os.path.exists(train_file) or not os.path.exists(val_file):
+    print("\n⚠️  Split files missing, creating them...")
+    
+    # Try to copy from VOC2012_filtered
+    source_imagesets = f"{KAGGLE_VOC_PREFIX}/voc_2012/processed/VOC2012_filtered/ImageSets/Main"
+    source_train = os.path.join(source_imagesets, 'train.txt')
+    
+    if os.path.exists(source_train):
+        shutil.copy(source_train, train_file)
+        source_val = os.path.join(source_imagesets, 'val.txt')
+        if os.path.exists(source_val):
+            shutil.copy(source_val, val_file)
+        else:
+            source_test = os.path.join(source_imagesets, 'test.txt')
+            if os.path.exists(source_test):
+                shutil.copy(source_test, val_file)
+        print("   ✅ Split files created from VOC2012_filtered")
+    else:
+        # Create from pairs.json
+        with open(PAIRS_JSON, 'r') as f:
+            pairs_data_temp = json.load(f)
+        all_ids = [pair['id'] for pair in pairs_data_temp['pairs']]
+        np.random.seed(42)
+        np.random.shuffle(all_ids)
+        n_total = len(all_ids)
+        n_train = int(0.70 * n_total)
+        n_val = int(0.15 * n_total)
+        train_ids = all_ids[:n_train]
+        val_ids = all_ids[n_train:n_train+n_val]
+        test_ids = all_ids[n_train+n_val:]
+        
+        with open(train_file, 'w') as f:
+            f.write('\n'.join(train_ids))
+        with open(val_file, 'w') as f:
+            f.write('\n'.join(val_ids))
+        with open(os.path.join(imagesets_dir, 'test.txt'), 'w') as f:
+            f.write('\n'.join(test_ids))
+        print(f"   ✅ Created splits: {len(train_ids)} train, {len(val_ids)} val, {len(test_ids)} test")
+
+# ===========================
 # SECTION 6: Load Data
 # ===========================
 print("\n📦 Loading datasets...")
