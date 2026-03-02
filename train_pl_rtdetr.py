@@ -392,14 +392,19 @@ class PLRTDETRTrainer:
         self.teacher.train()
         
         total_loss = 0
-        pbar = tqdm(self.train_loader_clean, desc=f"Teacher Epoch {epoch+1}", 
-                    mininterval=2.0, maxinterval=10.0)  # Update every 2-10 seconds
-        
-        update_freq = max(25, len(self.train_loader_clean) // 20)  # Update every 5% or 25 batches
+        pbar = tqdm(self.train_loader_clean, desc=f"Epoch {epoch+1}/{self.config['teacher_epochs']}", 
+                    leave=True, dynamic_ncols=False, ncols=100)
         
         for batch_idx, batch in enumerate(pbar):
             images = batch['images'].to(self.device)
+            
+            # Move target tensors to device
             targets = batch['targets']
+            for target in targets:
+                if 'boxes' in target:
+                    target['boxes'] = target['boxes'].to(self.device)
+                if 'labels' in target:
+                    target['labels'] = target['labels'].to(self.device)
             
             # Forward pass
             self.teacher_optimizer.zero_grad()
@@ -418,9 +423,8 @@ class PLRTDETRTrainer:
             
             total_loss += loss.item()
             
-            # Update progress bar only periodically
-            if batch_idx % update_freq == 0:
-                pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+            # Update progress bar with current loss (tqdm handles update frequency)
+            pbar.set_postfix({'loss': f'{loss.item():.4f}', 'avg': f'{total_loss/(batch_idx+1):.4f}'})
             
             # Log to tensorboard
             if batch_idx % 10 == 0:
@@ -499,16 +503,21 @@ class PLRTDETRTrainer:
         total_detection_loss = 0
         total_perceptual_loss = 0
         
-        pbar = tqdm(self.train_loader_foggy, desc=f"Student Epoch {epoch+1}",
-                    mininterval=2.0, maxinterval=10.0)  # Update every 2-10 seconds
-        
-        update_freq = max(25, len(self.train_loader_foggy) // 20)  # Update every 5% or 25 batches
+        pbar = tqdm(self.train_loader_foggy, desc=f"Epoch {epoch+1}/{self.config['student_epochs']}",
+                    leave=True, dynamic_ncols=False, ncols=100)
         
         for batch_idx, batch in enumerate(pbar):
             # Get foggy images and clean images from the batch
             foggy_images = batch.get('foggy_image', batch['images']).to(self.device)
             clean_images = batch.get('clean_image', batch['images']).to(self.device)
+            
+            # Move target tensors to device
             targets = batch['targets']
+            for target in targets:
+                if 'boxes' in target:
+                    target['boxes'] = target['boxes'].to(self.device)
+                if 'labels' in target:
+                    target['labels'] = target['labels'].to(self.device)
             
             # Forward pass - Teacher (no gradients)
             with torch.no_grad():
@@ -562,13 +571,12 @@ class PLRTDETRTrainer:
             total_detection_loss += losses['detection_loss'].item()
             total_perceptual_loss += losses['perceptual_loss'].item()
             
-            # Update progress bar only periodically
-            if batch_idx % update_freq == 0:
-                pbar.set_postfix({
-                    'total': f'{losses["total_loss"].item():.4f}',
-                    'det': f'{losses["detection_loss"].item():.4f}',
-                    'perc': f'{losses["perceptual_loss"].item():.4f}'
-                })
+            # Update progress bar with running averages
+            pbar.set_postfix({
+                'loss': f'{total_loss/(batch_idx+1):.4f}',
+                'det': f'{total_detection_loss/(batch_idx+1):.4f}',
+                'perc': f'{total_perceptual_loss/(batch_idx+1):.4f}'
+            })
             
             # Log to tensorboard
             if batch_idx % 10 == 0:
