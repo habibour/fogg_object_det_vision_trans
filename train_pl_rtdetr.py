@@ -366,7 +366,6 @@ class PLRTDETRTrainer:
             # Save periodic checkpoint
             if (epoch + 1) % self.config['save_interval'] == 0:
                 self.save_checkpoint(f'teacher_epoch_{epoch+1}.pth', is_teacher=True)
-                print(f"💾 Checkpoint saved: teacher_epoch_{epoch+1}.pth")
         
         print("\n✅ Teacher training complete!")
         
@@ -475,7 +474,6 @@ class PLRTDETRTrainer:
             # Save periodic checkpoint
             if (epoch + 1) % self.config['save_interval'] == 0:
                 self.save_checkpoint(f'student_epoch_{epoch+1}.pth', is_teacher=False)
-                print(f"💾 Checkpoint saved: student_epoch_{epoch+1}.pth")
         
         print("\n✅ Student training complete!")
     
@@ -594,35 +592,47 @@ class PLRTDETRTrainer:
         model = self.teacher if is_teacher else self.student
         optimizer = self.teacher_optimizer if is_teacher else self.student_optimizer
         
-        checkpoint = {
-            'epoch': self.current_epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'best_map': self.best_map,
-            'config': self.config
-        }
-        
         save_path = self.checkpoint_dir / filename
         
         try:
             # Ensure directory exists
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            print(f"📂 Checkpoint directory: {self.checkpoint_dir} (exists: {self.checkpoint_dir.exists()})")
             
+            # Create checkpoint dict
+            print(f"📦 Creating checkpoint for epoch {self.current_epoch}...")
+            checkpoint = {
+                'epoch': self.current_epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'best_map': self.best_map,
+                'config': self.config
+            }
+            
+            print(f"💾 Saving to: {save_path}...")
             # Save checkpoint
             torch.save(checkpoint, save_path)
             
             # Verify file was written
             if save_path.exists():
                 file_size_mb = save_path.stat().st_size / (1024 * 1024)
-                print(f"💾 Checkpoint saved: {save_path}")
-                print(f"   File size: {file_size_mb:.2f} MB")
+                print(f"✅ Checkpoint saved successfully!")
+                print(f"   Path: {save_path}")
+                print(f"   Size: {file_size_mb:.2f} MB")
+                return True
             else:
-                print(f"⚠️  Warning: Checkpoint file not found after save: {save_path}")
+                print(f"❌ ERROR: File not found after torch.save()!")
+                print(f"   Expected path: {save_path}")
+                print(f"   Directory contents:")
+                for f in self.checkpoint_dir.iterdir():
+                    print(f"     - {f.name}")
+                return False
                 
         except Exception as e:
-            print(f"❌ Error saving checkpoint: {e}")
+            print(f"❌ EXCEPTION during checkpoint save: {e}")
             import traceback
             traceback.print_exc()
+            return False
     
     def load_checkpoint(self, checkpoint_path, is_teacher=True):
         """Load model checkpoint."""
