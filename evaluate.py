@@ -64,8 +64,14 @@ class Evaluator:
         print(f"Evaluating on {len(dataloader)} batches...")
         
         with torch.no_grad():
-            for images, targets in tqdm(dataloader):
-                images = images.to(self.device)
+            for batch in tqdm(dataloader):
+                # Handle both dict format (from collate_fn) and tuple format
+                if isinstance(batch, dict):
+                    images = batch['images'].to(self.device)
+                    targets = batch['targets']
+                else:
+                    images, targets = batch
+                    images = images.to(self.device)
                 
                 # Get predictions
                 outputs = self.model(images)
