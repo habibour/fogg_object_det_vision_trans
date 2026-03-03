@@ -317,12 +317,14 @@ class PLRTDETRTrainer:
                     # Simple L1 distance between predictions and first GT box
                     # (simplified matching - real RT-DETR uses Hungarian matching)
                     if preds.size(1) > 0:
-                        pred_boxes = preds[batch_idx, 0, :4]  # First prediction
+                        pred_boxes = preds[batch_idx, 0, :4]  # First prediction [4]
                         if len(gt_boxes) > 0:
-                            gt_box = gt_boxes[0]  # First GT box
-                            target_loss = target_loss + torch.nn.functional.l1_loss(
-                                pred_boxes, gt_box
-                            ) * 2.0
+                            gt_box = gt_boxes[0]  # First GT box [4]
+                            # Ensure both tensors have same shape
+                            if pred_boxes.shape == gt_box.shape:
+                                target_loss = target_loss + torch.nn.functional.l1_loss(
+                                    pred_boxes, gt_box, reduction='mean'
+                                ) * 2.0
             
             # Combine all losses
             total_loss = bbox_loss + class_loss + obj_loss + target_loss
@@ -426,11 +428,13 @@ class PLRTDETRTrainer:
         """Validate teacher network."""
         self.teacher.eval()
         
-        # Placeholder validation
-        # TODO: Implement proper mAP calculation
+        # ⚠️ PLACEHOLDER VALIDATION - Not computing real mAP yet
+        # For proper evaluation, use evaluate.py after training
+        # This is just to enable checkpoint saving logic
         metrics = {'mAP': 0.5, 'mAP50': 0.6}
         
-        print(f"Validation - mAP: {metrics['mAP']:.4f}")
+        print(f"⚠️  Validation - mAP: {metrics['mAP']:.4f} (placeholder - not real mAP)")
+        print(f"   💡 Run evaluation after training for real metrics")
         self.writer.add_scalar('Teacher/val_mAP', metrics['mAP'], epoch)
         
         return metrics
@@ -588,11 +592,13 @@ class PLRTDETRTrainer:
         """Validate student network on foggy images."""
         self.student.eval()
         
-        # Placeholder validation
-        # TODO: Implement proper mAP calculation on foggy validation set
+        # ⚠️ PLACEHOLDER VALIDATION - Not computing real mAP yet
+        # For proper evaluation, use evaluate.py after training
+        # This is just to enable checkpoint saving logic
         metrics = {'mAP': 0.5, 'mAP50': 0.6}
         
-        print(f"Validation - mAP: {metrics['mAP']:.4f}")
+        print(f"⚠️  Validation - mAP: {metrics['mAP']:.4f} (placeholder - not real mAP)")
+        print(f"   💡 Run evaluation after training for real metrics")
         self.writer.add_scalar('Student/val_mAP', metrics['mAP'], epoch)
         
         return metrics
