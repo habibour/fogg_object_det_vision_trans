@@ -493,6 +493,12 @@ class PLRTDETRTrainer:
             foggy_images = batch.get('foggy_image', batch['images']).to(self.device)
             clean_images = batch.get('clean_image', batch['images']).to(self.device)
             
+            # Validate image tensors
+            if not isinstance(foggy_images, torch.Tensor):
+                foggy_images = batch['images'].to(self.device)
+            if not isinstance(clean_images, torch.Tensor):
+                clean_images = batch['images'].to(self.device)
+            
             # Move target tensors to device
             targets = batch['targets']
             for target in targets:
