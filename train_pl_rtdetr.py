@@ -50,11 +50,15 @@ class PLRTDETRTrainer:
         # Create output directories
         self.output_dir = Path(config['output_dir'])
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.checkpoint_dir = self.output_dir / 'checkpoints'
-        self.checkpoint_dir.mkdir(exist_ok=True)
         
-        # Setup tensorboard
-        self.writer = SummaryWriter(log_dir=str(self.output_dir / 'logs'))
+        # Use checkpoint_dir from config (not a subdirectory)
+        self.checkpoint_dir = Path(config.get('checkpoint_dir', self.output_dir))
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Setup tensorboard (logs in subdirectory)
+        logs_dir = self.output_dir / 'logs'
+        logs_dir.mkdir(exist_ok=True)
+        self.writer = SummaryWriter(log_dir=str(logs_dir))
         
         # Dataset and dataloaders
         self.setup_data()
