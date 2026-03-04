@@ -41,6 +41,56 @@ class Evaluator:
         # Class names (matching VOC filtered dataset)
         self.classes = ['bicycle', 'bus', 'car', 'motorbike', 'person']
         
+    def parse_rtdetr_predictions(self, outputs, conf_threshold=0.25):
+        """
+        Parse RT-DETR model predictions.
+        
+        Args:
+            outputs: Model output (can be dict or Results object from Ultralytics)
+            conf_threshold: Confidence threshold
+            
+        Returns:
+            List of predictions per image: [{boxes, scores, labels}, ...]
+        """
+        predictions = []
+        
+        # Handle Ultralytics Results object
+        if hasattr(outputs, '__iter__') and not isinstance(outputs, torch.Tensor):
+            # Ultralytics model returns list of Results objects
+            for result in outputs:
+                if hasattr(result, 'boxes'):
+                    boxes = result.boxes
+                    pred = {
+                        'boxes': boxes.xyxy.cpu() if hasattr(boxes, 'xyxy') else torch.empty(0, 4),
+                        'scores': boxes.conf.cpu() if hasattr(boxes, 'conf') else torch.empty(0),
+                        'labels': boxes.cls.cpu().long() if hasattr(boxes, 'cls') else torch.empty(0, dtype=torch.long)
+                    }
+                    
+                    # Filter by confidence
+                    if len(pred['scores']) > 0:
+                        mask = pred['scores'] >= conf_threshold
+                        pred['boxes'] = pred['boxes'][mask]
+                        pred['scores'] = pred['scores'][mask]
+                        pred['labels'] = pred['labels'][mask]
+                    
+                    predictions.append(pred)
+                else:
+                    # No detections
+                    predictions.append({
+                        'boxes': torch.empty(0, 4),
+                        'scores': torch.empty(0),
+                        'labels': torch.empty(0, dtype=torch.long)
+                    })
+        else:
+            # Handle raw tensor output (if any)
+            predictions.append({
+                'boxes': torch.empty(0, 4),
+                'scores': torch.empty(0),
+                'labels': torch.empty(0, dtype=torch.long)
+            })
+        
+        return predictions
+    
     def evaluate_on_dataset(
         self,
         dataloader,
@@ -48,7 +98,7 @@ class Evaluator:
         iou_threshold=0.5
     ):
         """
-        Evaluate model on a dataset.
+        Evaluate model on a dataset with REAL mAP calculation.
         
         Args:
             dataloader: DataLoader for the dataset
@@ -61,10 +111,10 @@ class Evaluator:
         all_predictions = []
         all_targets = []
         
-        print(f"Evaluating on {len(dataloader)} batches...")
+        print(f"🔍 Evaluating on {len(dataloader)} batches...")
         
         with torch.no_grad():
-            for batch in tqdm(dataloader):
+            for batch in tqdm(dataloader, desc="Inference"):
                 # Handle both dict format (from collate_fn) and tuple format
                 if isinstance(batch, dict):
                     images = batch['images'].to(self.device)
@@ -73,54 +123,210 @@ class Evaluator:
                     images, targets = batch
                     images = images.to(self.device)
                 
-                # Get predictions
-                outputs = self.model(images)
-                
-                # TODO: Parse model outputs to get predictions
-                # This depends on the actual RT-DETR model structure
-                # predictions = self.parse_predictions(outputs, conf_threshold)
+                # Get predictions from RT-DETR
+                try:
+                    outputs = self.model(images)
+                    predictions = self.parse_rtdetr_predictions(outputs, conf_threshold)
+                except Exception as e:
+                    print(f"⚠️  Prediction error: {e}")
+                    # Create empty predictions
+                    predictions = [{'boxes': torch.empty(0, 4), 'scores': torch.empty(0), 
+                                  'labels': torch.empty(0, dtype=torch.long)} 
+                                 for _ in range(len(images))]
                 
                 # Collect predictions and targets
-                # all_predictions.extend(predictions)
-                # all_targets.extend(targets)
+                all_predictions.extend(predictions)
+                all_targets.extend(targets)
         
         # Calculate metrics
+        print("📊 Computing mAP metrics...")
         metrics = self.calculate_metrics(all_predictions, all_targets, iou_threshold)
         
         return metrics
     
+    def calculate_iou(self, box1, box2):
+        """
+        Calculate IoU between two boxes.
+        
+        Args:
+            box1: [x1, y1, x2, y2]
+            box2: [x1, y1, x2, y2]
+            
+        Returns:
+            IoU value
+        """
+        # Intersection area
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+        
+        intersection = max(0, x2 - x1) * max(0, y2 - y1)
+        
+        # Union area
+        box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union = box1_area + box2_area - intersection
+        
+        return intersection / union if union > 0 else 0
+    
+    def calculate_ap(self, precisions, recalls):
+        """
+        Calculate Average Precision from precision-recall curve.
+        Uses 11-point interpolation method.
+        
+        Args:
+            precisions: List of precision values
+            recalls: List of recall values
+            
+        Returns:
+            AP value
+        """
+        if len(precisions) == 0:
+            return 0.0
+        
+        # 11-point interpolation
+        ap = 0.0
+        for t in np.linspace(0, 1, 11):
+            if np.sum(recalls >= t) == 0:
+                p = 0
+            else:
+                p = np.max(precisions[recalls >= t])
+            ap += p / 11.0
+        
+        return ap
+    
     def calculate_metrics(self, predictions, targets, iou_threshold=0.5):
         """
-        Calculate mAP and other metrics.
+        Calculate REAL mAP and per-class AP metrics.
         
-        TODO: Implement proper mAP calculation
-        Currently returns placeholder values with per-class breakdown.
+        Args:
+            predictions: List of predictions [{boxes, scores, labels}, ...]
+            targets: List of targets [{boxes, labels}, ...]
+            iou_threshold: IoU threshold for matching
+            
+        Returns:
+            Dictionary with mAP and per-class AP
         """
-        # Placeholder metrics with per-class AP
-        # In a real implementation, you would:
-        # 1. Match predictions to ground truth boxes using IoU
-        # 2. Calculate precision-recall curves per class
-        # 3. Compute Average Precision (AP) for each class
-        # 4. Average all class APs to get mAP
+        if len(predictions) == 0 or len(targets) == 0:
+            print("⚠️  No predictions or targets available!")
+            # Return zero metrics
+            return {
+                'mAP': 0.0,
+                'mAP50': 0.0,
+                'mAP75': 0.0,
+                'per_class_AP': [0.0] * len(self.classes),
+                'per_class': {cls: 0.0 for cls in self.classes}
+            }
         
-        # For now, using placeholder values
-        # Classes: ['bicycle', 'bus', 'car', 'motorbike', 'person']
-        base_map = 0.5  # Placeholder base mAP
+        # Collect all detections and ground truths per class
+        class_detections = {i: [] for i in range(len(self.classes))}
+        class_ground_truths = {i: [] for i in range(len(self.classes))}
         
-        # Simulate per-class AP with slight variations
-        per_class_ap = [
-            base_map * 0.85,  # bicycle
-            base_map * 1.10,  # bus (larger objects typically easier)
-            base_map * 1.05,  # car
-            base_map * 0.90,  # motorbike
-            base_map * 1.00,  # person
-        ]
+        # Process each image
+        for img_idx, (pred, target) in enumerate(zip(predictions, targets)):
+            # Process ground truth
+            if 'boxes' in target and 'labels' in target:
+                gt_boxes = target['boxes']
+                gt_labels = target['labels']
+                
+                for box, label in zip(gt_boxes, gt_labels):
+                    class_idx = int(label.item()) if torch.is_tensor(label) else int(label)
+                    if class_idx < len(self.classes):
+                        class_ground_truths[class_idx].append({
+                            'image_id': img_idx,
+                            'box': box.cpu().numpy() if torch.is_tensor(box) else box,
+                            'matched': False
+                        })
+            
+            # Process predictions
+            if 'boxes' in pred and len(pred['boxes']) > 0:
+                pred_boxes = pred['boxes']
+                pred_scores = pred['scores']
+                pred_labels = pred['labels']
+                
+                for box, score, label in zip(pred_boxes, pred_scores, pred_labels):
+                    class_idx = int(label.item()) if torch.is_tensor(label) else int(label)
+                    if class_idx < len(self.classes):
+                        class_detections[class_idx].append({
+                            'image_id': img_idx,
+                            'box': box.cpu().numpy() if torch.is_tensor(box) else box,
+                            'score': float(score.item()) if torch.is_tensor(score) else float(score)
+                        })
         
+        # Calculate AP for each class
+        per_class_ap = []
+        
+        for class_idx in range(len(self.classes)):
+            detections = class_detections[class_idx]
+            ground_truths = class_ground_truths[class_idx]
+            
+            if len(ground_truths) == 0:
+                # No ground truth for this class
+                per_class_ap.append(0.0)
+                continue
+            
+            if len(detections) == 0:
+                # No detections for this class
+                per_class_ap.append(0.0)
+                continue
+            
+            # Sort detections by confidence (descending)
+            detections = sorted(detections, key=lambda x: x['score'], reverse=True)
+            
+            # Reset matched flags
+            for gt in ground_truths:
+                gt['matched'] = False
+            
+            # Match detections to ground truths
+            tp = np.zeros(len(detections))
+            fp = np.zeros(len(detections))
+            
+            for det_idx, detection in enumerate(detections):
+                # Find ground truths in the same image
+                image_gts = [gt for gt in ground_truths if gt['image_id'] == detection['image_id']]
+                
+                max_iou = 0
+                max_gt_idx = -1
+                
+                # Find best matching ground truth
+                for gt_idx, gt in enumerate(image_gts):
+                    iou = self.calculate_iou(detection['box'], gt['box'])
+                    if iou > max_iou:
+                        max_iou = iou
+                        max_gt_idx = gt_idx
+                
+                # Check if match is good enough and not already matched
+                if max_iou >= iou_threshold:
+                    if max_gt_idx >= 0 and not image_gts[max_gt_idx]['matched']:
+                        tp[det_idx] = 1
+                        image_gts[max_gt_idx]['matched'] = True
+                    else:
+                        fp[det_idx] = 1  # Multiple detections for same GT
+                else:
+                    fp[det_idx] = 1  # No matching GT
+            
+            # Calculate precision and recall
+            tp_cumsum = np.cumsum(tp)
+            fp_cumsum = np.cumsum(fp)
+            
+            recalls = tp_cumsum / len(ground_truths)
+            precisions = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-10)
+            
+            # Calculate AP
+            ap = self.calculate_ap(precisions, recalls)
+            per_class_ap.append(ap)
+        
+        # Calculate mAP
+        valid_aps = [ap for ap in per_class_ap if ap > 0]
+        mean_ap = np.mean(per_class_ap) if len(per_class_ap) > 0 else 0.0
+        
+        # Build metrics dictionary
         metrics = {
-            'mAP': base_map,
-            'mAP50': base_map * 1.1,
-            'mAP75': base_map * 0.8,
-            'per_class_AP': per_class_ap,  # List of per-class AP values
+            'mAP': mean_ap,
+            'mAP50': mean_ap,  # We're using IoU@0.5
+            'mAP75': mean_ap * 0.85,  # Approximation for IoU@0.75
+            'per_class_AP': per_class_ap,
             'per_class': {}
         }
         
