@@ -41,22 +41,60 @@ class Evaluator:
         # Class names (matching VOC filtered dataset)
         self.classes = ['bicycle', 'bus', 'car', 'motorbike', 'person']
         
-    def parse_rtdetr_predictions(self, outputs, conf_threshold=0.25):
+    def parse_rtdetr_predictions(self, outputs, conf_threshold=0.25, image_size=640):
         """
         Parse RT-DETR model predictions.
         
         Args:
-            outputs: Model output (can be dict or Results object from Ultralytics)
+            outputs: Model output (dict with pred_boxes/pred_logits, or Ultralytics Results)
             conf_threshold: Confidence threshold
+            image_size: Image size for denormalizing boxes (default: 640)
             
         Returns:
             List of predictions per image: [{boxes, scores, labels}, ...]
         """
         predictions = []
         
-        # Handle Ultralytics Results object
-        if hasattr(outputs, '__iter__') and not isinstance(outputs, torch.Tensor):
-            # Ultralytics model returns list of Results objects
+        # Case 1: Raw PyTorch model output (dict with pred_boxes, pred_logits)
+        if isinstance(outputs, dict) and 'pred_boxes' in outputs:
+            pred_boxes = outputs['pred_boxes']  # [batch, num_queries, 4] in cxcywh normalized
+            pred_logits = outputs['pred_logits']  # [batch, num_queries, num_classes]
+            
+            batch_size = pred_boxes.shape[0]
+            
+            for i in range(batch_size):
+                # Get scores and labels
+                scores = pred_logits[i].sigmoid().max(dim=-1)[0]  # [num_queries]
+                labels = pred_logits[i].sigmoid().argmax(dim=-1)  # [num_queries]
+                
+                # Filter by confidence
+                mask = scores >= conf_threshold
+                filtered_boxes = pred_boxes[i][mask]  # [num_filtered, 4]
+                filtered_scores = scores[mask]  # [num_filtered]
+                filtered_labels = labels[mask]  # [num_filtered]
+                
+                # Convert from cxcywh normalized to xyxy
+                if len(filtered_boxes) > 0:
+                    boxes_xyxy = torch.zeros_like(filtered_boxes)
+                    # cxcywh to xyxy
+                    boxes_xyxy[:, 0] = filtered_boxes[:, 0] - filtered_boxes[:, 2] / 2  # x1
+                    boxes_xyxy[:, 1] = filtered_boxes[:, 1] - filtered_boxes[:, 3] / 2  # y1
+                    boxes_xyxy[:, 2] = filtered_boxes[:, 0] + filtered_boxes[:, 2] / 2  # x2
+                    boxes_xyxy[:, 3] = filtered_boxes[:, 1] + filtered_boxes[:, 3] / 2  # y2
+                    
+                    # Denormalize using provided image size
+                    boxes_xyxy = boxes_xyxy * image_size
+                else:
+                    boxes_xyxy = torch.empty(0, 4)
+                
+                predictions.append({
+                    'boxes': boxes_xyxy.cpu(),
+                    'scores': filtered_scores.cpu(),
+                    'labels': filtered_labels.cpu().long()
+                })
+        
+        # Case 2: Ultralytics Results object (list of result objects)
+        elif hasattr(outputs, '__iter__') and not isinstance(outputs, torch.Tensor):
             for result in outputs:
                 if hasattr(result, 'boxes'):
                     boxes = result.boxes
@@ -81,8 +119,10 @@ class Evaluator:
                         'scores': torch.empty(0),
                         'labels': torch.empty(0, dtype=torch.long)
                     })
+        
+        # Case 3: Unknown format - return empty predictions
         else:
-            # Handle raw tensor output (if any)
+            print(f"⚠️  Unknown output format: {type(outputs)}")
             predictions.append({
                 'boxes': torch.empty(0, 4),
                 'scores': torch.empty(0),
@@ -131,13 +171,22 @@ class Evaluator:
                 # Get predictions from RT-DETR
                 try:
                     outputs = self.model(images)
-                    predictions = self.parse_rtdetr_predictions(outputs, conf_threshold)
+                    # Infer image size from input (assume square images)
+                    image_size = images.shape[-1]  # Height or width
+                    predictions = self.parse_rtdetr_predictions(outputs, conf_threshold, image_size)
                     
                     # Debug first batch
                     if batch_idx == 0:
                         print(f"\n   First batch debug:")
                         print(f"   - Images shape: {images.shape}")
+                        print(f"   - Image size used: {image_size}")
                         print(f"   - Outputs type: {type(outputs)}")
+                        if isinstance(outputs, dict):
+                            print(f"   - Output keys: {list(outputs.keys())}")
+                            if 'pred_boxes' in outputs:
+                                print(f"   - pred_boxes shape: {outputs['pred_boxes'].shape}")
+                            if 'pred_logits' in outputs:
+                                print(f"   - pred_logits shape: {outputs['pred_logits'].shape}")
                         if len(predictions) > 0:
                             print(f"   - First prediction boxes: {predictions[0]['boxes'].shape}")
                             print(f"   - First prediction scores: {predictions[0]['scores'].shape}")
