@@ -108,13 +108,18 @@ class Evaluator:
         Returns:
             Dictionary with evaluation metrics
         """
+        # Ensure model is in eval mode
+        self.model.eval()
+        
         all_predictions = []
         all_targets = []
         
         print(f"🔍 Evaluating on {len(dataloader)} batches...")
+        print(f"   Device: {self.device}")
+        print(f"   Model in eval mode: {not self.model.training}")
         
         with torch.no_grad():
-            for batch in tqdm(dataloader, desc="Inference"):
+            for batch_idx, batch in enumerate(tqdm(dataloader, desc="Inference")):
                 # Handle both dict format (from collate_fn) and tuple format
                 if isinstance(batch, dict):
                     images = batch['images'].to(self.device)
@@ -127,8 +132,21 @@ class Evaluator:
                 try:
                     outputs = self.model(images)
                     predictions = self.parse_rtdetr_predictions(outputs, conf_threshold)
+                    
+                    # Debug first batch
+                    if batch_idx == 0:
+                        print(f"\n   First batch debug:")
+                        print(f"   - Images shape: {images.shape}")
+                        print(f"   - Outputs type: {type(outputs)}")
+                        if len(predictions) > 0:
+                            print(f"   - First prediction boxes: {predictions[0]['boxes'].shape}")
+                            print(f"   - First prediction scores: {predictions[0]['scores'].shape}")
+                            print(f"   - First prediction labels: {predictions[0]['labels'].shape}")
+                        
                 except Exception as e:
-                    print(f"⚠️  Prediction error: {e}")
+                    print(f"⚠️  Prediction error on batch {batch_idx}: {e}")
+                    import traceback
+                    traceback.print_exc()
                     # Create empty predictions
                     predictions = [{'boxes': torch.empty(0, 4), 'scores': torch.empty(0), 
                                   'labels': torch.empty(0, dtype=torch.long)} 
@@ -140,6 +158,23 @@ class Evaluator:
         
         # Calculate metrics
         print("📊 Computing mAP metrics...")
+        print(f"   Total images: {len(all_predictions)}")
+        print(f"   Total targets: {len(all_targets)}")
+        
+        # Debug: Check first prediction and target
+        if len(all_predictions) > 0:
+            pred_sample = all_predictions[0]
+            print(f"   Sample prediction - boxes: {len(pred_sample.get('boxes', []))}, "
+                  f"labels: {pred_sample.get('labels', torch.tensor([])).shape}")
+        
+        if len(all_targets) > 0:
+            target_sample = all_targets[0]
+            print(f"   Sample target type: {type(target_sample)}")
+            if isinstance(target_sample, dict):
+                print(f"   Target keys: {target_sample.keys()}")
+                print(f"   Target boxes: {len(target_sample.get('boxes', []))}, "
+                      f"labels: {target_sample.get('labels', torch.tensor([])).shape}")
+        
         metrics = self.calculate_metrics(all_predictions, all_targets, iou_threshold)
         
         return metrics
@@ -208,6 +243,10 @@ class Evaluator:
         Returns:
             Dictionary with mAP and per-class AP
         """
+        print(f"\n📊 calculate_metrics debug:")
+        print(f"   - Number of predictions: {len(predictions)}")
+        print(f"   - Number of targets: {len(targets)}")
+        
         if len(predictions) == 0 or len(targets) == 0:
             print("⚠️  No predictions or targets available!")
             # Return zero metrics
@@ -224,9 +263,21 @@ class Evaluator:
         class_ground_truths = {i: [] for i in range(len(self.classes))}
         
         # Process each image
+        total_gts = 0
+        total_preds = 0
         for img_idx, (pred, target) in enumerate(zip(predictions, targets)):
+            # Debug first image
+            if img_idx == 0:
+                print(f"   First image target type: {type(target)}")
+                if isinstance(target, dict):
+                    print(f"   Target keys: {list(target.keys())}")
+                    if 'boxes' in target:
+                        print(f"   Target boxes shape: {target['boxes'].shape if hasattr(target['boxes'], 'shape') else len(target['boxes'])}")
+                    if 'labels' in target:
+                        print(f"   Target labels: {target['labels']}")
+            
             # Process ground truth
-            if 'boxes' in target and 'labels' in target:
+            if isinstance(target, dict) and 'boxes' in target and 'labels' in target:
                 gt_boxes = target['boxes']
                 gt_labels = target['labels']
                 
@@ -238,6 +289,7 @@ class Evaluator:
                             'box': box.cpu().numpy() if torch.is_tensor(box) else box,
                             'matched': False
                         })
+                        total_gts += 1
             
             # Process predictions
             if 'boxes' in pred and len(pred['boxes']) > 0:
@@ -253,6 +305,12 @@ class Evaluator:
                             'box': box.cpu().numpy() if torch.is_tensor(box) else box,
                             'score': float(score.item()) if torch.is_tensor(score) else float(score)
                         })
+                        total_preds += 1
+        
+        print(f"   Total ground truths collected: {total_gts}")
+        print(f"   Total predictions collected: {total_preds}")
+        print(f"   Per-class ground truths: {[len(class_ground_truths[i]) for i in range(len(self.classes))]}")
+        print(f"   Per-class predictions: {[len(class_detections[i]) for i in range(len(self.classes))]}")
         
         # Calculate AP for each class
         per_class_ap = []
