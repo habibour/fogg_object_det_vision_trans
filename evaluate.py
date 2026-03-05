@@ -45,8 +45,13 @@ class Evaluator:
         """
         Parse RT-DETR model predictions.
         
+        Handles multiple output formats:
+        - Tuple outputs (nested or flat)
+        - Dict outputs with pred_boxes/pred_logits
+        - Ultralytics Results objects
+        
         Args:
-            outputs: Model output (dict with pred_boxes/pred_logits, or Ultralytics Results)
+            outputs: Model output
             conf_threshold: Confidence threshold
             image_size: Image size for denormalizing boxes (default: 640)
             
@@ -55,34 +60,68 @@ class Evaluator:
         """
         predictions = []
         
-        # Case 1: Raw PyTorch model output (dict with pred_boxes, pred_logits)
-        if isinstance(outputs, dict) and 'pred_boxes' in outputs:
-            pred_boxes = outputs['pred_boxes']  # [batch, num_queries, 4] in cxcywh normalized
-            pred_logits = outputs['pred_logits']  # [batch, num_queries, num_classes]
+        # Helper function to flatten nested tuples
+        def flatten_tuple(obj):
+            """Recursively flatten nested tuples to find tensors."""
+            if isinstance(obj, torch.Tensor):
+                return [obj]
+            elif isinstance(obj, (tuple, list)):
+                result = []
+                for item in obj:
+                    result.extend(flatten_tuple(item))
+                return result
+            else:
+                return []
+        
+        # Case 1: Tuple/List output (most common for raw PyTorch RT-DETR)
+        if isinstance(outputs, (tuple, list)) and not hasattr(outputs, 'boxes'):
+            # Flatten to get all tensors
+            all_tensors = flatten_tuple(outputs)
             
-            batch_size = pred_boxes.shape[0]
+            # Find pred_boxes and pred_logits
+            # pred_boxes: shape ends with 4 (x, y, w, h)
+            # pred_logits: shape ends with num_classes (> 4)
+            pred_boxes = None
+            pred_logits = None
+            
+            for tensor in all_tensors:
+                if isinstance(tensor, torch.Tensor) and tensor.dim() >= 2:
+                    if tensor.shape[-1] == 4:
+                        pred_boxes = tensor
+                    elif tensor.shape[-1] > 4:  # Assume it's logits
+                        pred_logits = tensor
+            
+            if pred_boxes is None or pred_logits is None:
+                # Return empty predictions
+                return [{'boxes': torch.empty(0, 4), 'scores': torch.empty(0), 
+                        'labels': torch.empty(0, dtype=torch.long)}]
+            
+            # Squeeze extra dimensions
+            while pred_boxes.dim() > 3:
+                pred_boxes = pred_boxes.squeeze(0)
+            while pred_logits.dim() > 3:
+                pred_logits = pred_logits.squeeze(0)
+            
+            batch_size = pred_logits.shape[0]
             
             for i in range(batch_size):
                 # Get scores and labels
-                scores = pred_logits[i].sigmoid().max(dim=-1)[0]  # [num_queries]
-                labels = pred_logits[i].sigmoid().argmax(dim=-1)  # [num_queries]
+                scores = pred_logits[i].sigmoid().max(dim=-1)[0]
+                labels = pred_logits[i].sigmoid().argmax(dim=-1)
                 
                 # Filter by confidence
                 mask = scores >= conf_threshold
-                filtered_boxes = pred_boxes[i][mask]  # [num_filtered, 4]
-                filtered_scores = scores[mask]  # [num_filtered]
-                filtered_labels = labels[mask]  # [num_filtered]
+                filtered_boxes = pred_boxes[i][mask]
+                filtered_scores = scores[mask]
+                filtered_labels = labels[mask]
                 
                 # Convert from cxcywh normalized to xyxy
                 if len(filtered_boxes) > 0:
                     boxes_xyxy = torch.zeros_like(filtered_boxes)
-                    # cxcywh to xyxy
                     boxes_xyxy[:, 0] = filtered_boxes[:, 0] - filtered_boxes[:, 2] / 2  # x1
                     boxes_xyxy[:, 1] = filtered_boxes[:, 1] - filtered_boxes[:, 3] / 2  # y1
                     boxes_xyxy[:, 2] = filtered_boxes[:, 0] + filtered_boxes[:, 2] / 2  # x2
                     boxes_xyxy[:, 3] = filtered_boxes[:, 1] + filtered_boxes[:, 3] / 2  # y2
-                    
-                    # Denormalize using provided image size
                     boxes_xyxy = boxes_xyxy * image_size
                 else:
                     boxes_xyxy = torch.empty(0, 4)
@@ -93,8 +132,45 @@ class Evaluator:
                     'labels': filtered_labels.cpu().long()
                 })
         
-        # Case 2: Ultralytics Results object (list of result objects)
-        elif hasattr(outputs, '__iter__') and not isinstance(outputs, torch.Tensor):
+        # Case 2: Dict output
+        elif isinstance(outputs, dict) and 'pred_boxes' in outputs:
+            pred_boxes = outputs['pred_boxes']
+            pred_logits = outputs['pred_logits']
+            
+            # Squeeze extra dimensions
+            while pred_boxes.dim() > 3:
+                pred_boxes = pred_boxes.squeeze(0)
+            while pred_logits.dim() > 3:
+                pred_logits = pred_logits.squeeze(0)
+            
+            batch_size = pred_boxes.shape[0]
+            
+            for i in range(batch_size):
+                scores = pred_logits[i].sigmoid().max(dim=-1)[0]
+                labels = pred_logits[i].sigmoid().argmax(dim=-1)
+                mask = scores >= conf_threshold
+                filtered_boxes = pred_boxes[i][mask]
+                filtered_scores = scores[mask]
+                filtered_labels = labels[mask]
+                
+                if len(filtered_boxes) > 0:
+                    boxes_xyxy = torch.zeros_like(filtered_boxes)
+                    boxes_xyxy[:, 0] = filtered_boxes[:, 0] - filtered_boxes[:, 2] / 2
+                    boxes_xyxy[:, 1] = filtered_boxes[:, 1] - filtered_boxes[:, 3] / 2
+                    boxes_xyxy[:, 2] = filtered_boxes[:, 0] + filtered_boxes[:, 2] / 2
+                    boxes_xyxy[:, 3] = filtered_boxes[:, 1] + filtered_boxes[:, 3] / 2
+                    boxes_xyxy = boxes_xyxy * image_size
+                else:
+                    boxes_xyxy = torch.empty(0, 4)
+                
+                predictions.append({
+                    'boxes': boxes_xyxy.cpu(),
+                    'scores': filtered_scores.cpu(),
+                    'labels': filtered_labels.cpu().long()
+                })
+        
+        # Case 3: Ultralytics Results object
+        elif hasattr(outputs, '__iter__') and hasattr(outputs[0] if len(outputs) > 0 else None, 'boxes'):
             for result in outputs:
                 if hasattr(result, 'boxes'):
                     boxes = result.boxes
@@ -113,16 +189,14 @@ class Evaluator:
                     
                     predictions.append(pred)
                 else:
-                    # No detections
                     predictions.append({
                         'boxes': torch.empty(0, 4),
                         'scores': torch.empty(0),
                         'labels': torch.empty(0, dtype=torch.long)
                     })
         
-        # Case 3: Unknown format - return empty predictions
+        # Case 4: Unknown format
         else:
-            print(f"⚠️  Unknown output format: {type(outputs)}")
             predictions.append({
                 'boxes': torch.empty(0, 4),
                 'scores': torch.empty(0),
