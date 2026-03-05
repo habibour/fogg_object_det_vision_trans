@@ -77,15 +77,43 @@ class VOCPairedDataset(Dataset):
     def __len__(self):
         return len(self.pairs)
     
-    def parse_voc_xml(self, xml_path: str) -> Dict:
-        """Parse VOC XML annotation."""
+    def parse_voc_xml(self, xml_path: str, filter_difficult: bool = None) -> Dict:
+        """
+        Parse VOC XML annotation.
+        
+        Args:
+            xml_path: Path to XML annotation
+            filter_difficult: If True, skip difficult/truncated objects
+                            If None, filter during training, keep during val/test
+        
+        Returns:
+            Dict with boxes, labels, image_size
+        """
         tree = ET.parse(xml_path)
         root = tree.getroot()
         
+        # Auto-determine filtering if not specified
+        if filter_difficult is None:
+            filter_difficult = (self.split == 'train')
+        
         boxes = []
         labels = []
+        difficult_count = 0
         
         for obj in root.findall('object'):
+            # Check if difficult or truncated (KEY FIX #2!)
+            difficult_elem = obj.find('difficult')
+            truncated_elem = obj.find('truncated')
+            
+            is_difficult = (difficult_elem is not None and int(difficult_elem.text) == 1) or \
+                          (truncated_elem is not None and int(truncated_elem.text) == 1)
+            
+            # Skip difficult objects during training
+            # This removes 68.8% of person annotations that are occluded/truncated
+            if filter_difficult and is_difficult:
+                difficult_count += 1
+                continue
+            
             cls_name = obj.find('name').text
             if cls_name not in self.class_to_idx:
                 continue
@@ -98,6 +126,10 @@ class VOCPairedDataset(Dataset):
             
             boxes.append([xmin, ymin, xmax, ymax])
             labels.append(self.class_to_idx[cls_name])
+        
+        # Log filtering occasionally (avoid spam)
+        if filter_difficult and difficult_count > 0 and len(boxes) % 50 == 0:
+            print(f"Filtered {difficult_count} difficult objects from training (cleaner signal)")
         
         # Get image size
         size = root.find('size')

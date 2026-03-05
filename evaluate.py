@@ -41,7 +41,8 @@ class Evaluator:
         # Class names (matching VOC filtered dataset)
         self.classes = ['bicycle', 'bus', 'car', 'motorbike', 'person']
         
-    def parse_rtdetr_predictions(self, outputs, conf_threshold=0.25, image_size=640):
+    def parse_rtdetr_predictions(self, outputs, conf_threshold=0.25, image_size=640, 
+                                 class_thresholds=None):
         """
         Parse RT-DETR model predictions.
         
@@ -52,12 +53,29 @@ class Evaluator:
         
         Args:
             outputs: Model output
-            conf_threshold: Confidence threshold
+            conf_threshold: Global confidence threshold (fallback)
             image_size: Image size for denormalizing boxes (default: 640)
+            class_thresholds: Dict mapping class indices to specific thresholds
+                             e.g., {0: 0.01, 1: 0.01} for bicycle and bus
             
         Returns:
             List of predictions per image: [{boxes, scores, labels}, ...]
         """
+        # Class-specific thresholds for underrepresented classes (KEY FIX #3!)
+        # bicycle=0, bus=1, car=2, motorbike=3, person=4
+        # Based on dataset analysis showing severe imbalance:
+        #   - bus: 4.3% of dataset (637 samples) → 0.00% AP
+        #   - bicycle: 5.4% of dataset (790 samples) → 0.28% AP
+        #   - person: 69% of dataset but 68.8% difficult → 0.32% AP
+        if class_thresholds is None:
+            class_thresholds = {
+                0: 0.01,  # bicycle - VERY low (severe imbalance)
+                1: 0.01,  # bus - VERY low (worst imbalance, explains 0% AP!)
+                2: 0.25,  # car - keep default (works well at 70-75% AP)
+                3: 0.05,  # motorbike - lower (imbalance)
+                4: 0.05,  # person - lower (high difficulty rate)
+            }
+        
         predictions = []
         
         # Helper function to flatten nested tuples
@@ -109,8 +127,18 @@ class Evaluator:
                 scores = pred_logits[i].sigmoid().max(dim=-1)[0]
                 labels = pred_logits[i].sigmoid().argmax(dim=-1)
                 
-                # Filter by confidence
-                mask = scores >= conf_threshold
+                # Filter by class-specific confidence thresholds
+                mask = torch.zeros(len(scores), dtype=torch.bool, device=scores.device)
+                for class_idx, threshold in class_thresholds.items():
+                    class_mask = (labels == class_idx) & (scores >= threshold)
+                    mask |= class_mask
+                
+                # Fallback: apply global threshold for any classes not in class_thresholds
+                unlisted_classes_mask = torch.ones(len(scores), dtype=torch.bool, device=scores.device)
+                for class_idx in class_thresholds.keys():
+                    unlisted_classes_mask &= (labels != class_idx)
+                mask |= (unlisted_classes_mask & (scores >= conf_threshold))
+                
                 filtered_boxes = pred_boxes[i][mask]
                 filtered_scores = scores[mask]
                 filtered_labels = labels[mask]
@@ -148,7 +176,19 @@ class Evaluator:
             for i in range(batch_size):
                 scores = pred_logits[i].sigmoid().max(dim=-1)[0]
                 labels = pred_logits[i].sigmoid().argmax(dim=-1)
-                mask = scores >= conf_threshold
+                
+                # Apply class-specific thresholds (same as Case 1)
+                mask = torch.zeros(len(scores), dtype=torch.bool, device=scores.device)
+                for class_idx, threshold in class_thresholds.items():
+                    class_mask = (labels == class_idx) & (scores >= threshold)
+                    mask |= class_mask
+                
+                # Fallback for unlisted classes
+                unlisted_classes_mask = torch.ones(len(scores), dtype=torch.bool, device=scores.device)
+                for class_idx in class_thresholds.keys():
+                    unlisted_classes_mask &= (labels != class_idx)
+                mask |= (unlisted_classes_mask & (scores >= conf_threshold))
+                
                 filtered_boxes = pred_boxes[i][mask]
                 filtered_scores = scores[mask]
                 filtered_labels = labels[mask]
