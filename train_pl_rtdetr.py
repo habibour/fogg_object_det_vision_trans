@@ -515,6 +515,7 @@ class PLRTDETRTrainer:
             total_box_loss = 0
             total_gt_objects = 0
             total_matched = 0
+            class_counts = torch.zeros(len(self.class_weights), device=images.device)  # Track class distribution
             
             # Process each image in batch
             for i in range(batch_size):
@@ -549,7 +550,7 @@ class PLRTDETRTrainer:
                 target_labels = torch.full((num_queries,), 80, dtype=torch.long, device=images.device)  # 80 = background
                 target_labels[:num_matched] = gt_labels[:num_matched].long()
                 
-                # Sigmoid + BCE loss
+                # Sigmoid + WEIGHTED BCE loss
                 pred_probs = pred_logits_i.sigmoid()
                 
                 # One-hot encode targets (81 classes including background)
@@ -557,13 +558,27 @@ class PLRTDETRTrainer:
                 target_onehot[torch.arange(num_queries), target_labels] = 1.0
                 target_onehot = target_onehot[:, :80]  # Remove background column for BCE
                 
-                # BCE loss with class weights
-                cls_loss = torch.nn.functional.binary_cross_entropy(
+                # Apply CLASS WEIGHTS to each prediction based on its target class
+                # This is the KEY FIX for imbalanced dataset!
+                sample_weights = torch.ones(num_queries, device=images.device)
+                for q_idx in range(num_matched):
+                    class_idx = gt_labels[q_idx].long().item()
+                    if class_idx < len(self.class_weights):
+                        # Apply class weight to matched queries
+                        sample_weights[q_idx] = self.class_weights[class_idx]
+                        # Track class distribution
+                        class_counts[class_idx] += 1
+                
+                # Compute per-sample BCE loss
+                bce_per_sample = torch.nn.functional.binary_cross_entropy(
                     pred_probs,
                     target_onehot,
-                    reduction='mean'
-                )
-                total_cls_loss += cls_loss
+                    reduction='none'
+                ).mean(dim=1)  # Average over classes, get [300]
+                
+                # Apply sample weights and reduce
+                weighted_bce = (bce_per_sample * sample_weights).mean()
+                total_cls_loss += weighted_bce
                 
                 # Box regression loss (L1 on matched boxes)
                 if num_matched > 0:
@@ -586,8 +601,9 @@ class PLRTDETRTrainer:
             
             # Debug output
             if debug:
+                class_names = ['bicycle', 'bus', 'car', 'motorbike', 'person']
                 print(f"\n   📊 LOSS BREAKDOWN (Paper Validation):")
-                print(f"      Classification loss: {avg_cls_loss.item():.4f}")
+                print(f"      Classification loss (WEIGHTED): {avg_cls_loss.item():.4f}")
                 print(f"      Box regression loss: {avg_box_loss.item():.4f}")
                 print(f"      Box weight: 5.0x (from paper)")
                 print(f"      Combined loss: {total_loss.item():.4f}")
@@ -595,6 +611,13 @@ class PLRTDETRTrainer:
                 print(f"      Matched predictions: {total_matched}")
                 print(f"      Avg matches per image: {total_matched/batch_size:.1f}")
                 print(f"      Loss has gradients: {total_loss.requires_grad}")
+                print(f"\n   🎯 CLASS WEIGHT APPLICATION:")
+                for cls_idx, (name, count) in enumerate(zip(class_names, class_counts)):
+                    if count > 0:
+                        weight = self.class_weights[cls_idx].item()
+                        print(f"      {name:12s}: {int(count.item()):2d} objects × {weight:6.2f}x weight")
+                if class_counts.sum() == 0:
+                    print(f"      ⚠️  No objects matched in this batch!")
             
             # Ensure gradient flow
             if not total_loss.requires_grad:
